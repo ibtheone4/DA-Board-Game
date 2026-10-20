@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cave Climb</title>
+
+  <!-- PyScript lets the browser run Python. It needs an internet connection. -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.11.1/core.css">
+  <script type="module" src="https://pyscript.net/releases/2024.11.1/core.js"></script>
+
+  <!-- CSS -->
+  <style>
+    :root { --white: #fff; --torch: #ffb347; --green: #6fcf97; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Dark cave rock, drawn with an SVG noise filter so no image file is needed */
+    body, .rung, .panel {
+      background-color: #1c232b;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' seed='4'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/></svg>");
+    }
+    body {
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      color: #fff;
+      line-height: 1.4;
+      min-height: 100vh;
+    }
+    main { max-width: 900px; margin: 0 auto; padding: 1rem 1rem 3rem; }
+    h1 {
+      font-family: Georgia, serif;
+      text-align: center;
+      font-size: clamp(2rem, 6vw, 3rem);
+      color: var(--torch);
+      margin-bottom: 1rem;
+    }
+    h2 { font-family: Georgia, serif; margin-bottom: 0.5rem; }
+
+    .panel { border: 4px solid var(--white); padding: 1.25rem; max-width: 480px; margin: 0 auto; }
+    label { display: block; margin-top: 0.75rem; font-weight: 700; }
+    input {
+      display: block; width: 100%; padding: 0.5rem; margin: 0.25rem 0 1rem;
+      background: #11161b; color: #fff; border: 2px solid var(--white); font-size: 1rem;
+    }
+    .button {
+      padding: 0.7rem 1.5rem; background: var(--torch); color: #2a1a00;
+      font-weight: 700; font-size: 1rem; border: none; border-radius: 999px; cursor: pointer;
+    }
+    .button:hover { filter: brightness(1.1); }
+    .button.secondary { background: transparent; color: #fff; border: 2px solid var(--white); }
+    .button:focus-visible, input:focus-visible { outline: 3px solid var(--torch); outline-offset: 2px; }
+
+    /* Board: ladder | dice area | ladder */
+    .board {
+      display: grid;
+      grid-template-columns: minmax(130px, 200px) 1fr minmax(130px, 200px);
+      gap: 1rem;
+      align-items: start;
+    }
+    .left { grid-column: 1; grid-row: 1; }
+    .right { grid-column: 3; grid-row: 1; }
+    .center { grid-column: 2; grid-row: 1; text-align: center; padding-top: 3rem; }
+
+    .lane { text-align: center; }
+    .lane h3 { font-size: 1.1rem; }
+    .lane.active h3 { color: var(--torch); }
+    .last { font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.4rem; }
+
+    .ladder { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; background: var(--white); }
+    .rung { position: relative; height: 46px; display: flex; align-items: center; justify-content: center; }
+    .step-no { font-size: 1.4rem; font-weight: 700; }
+    .token {
+      position: absolute; right: 8px; width: 24px; height: 24px;
+      border-radius: 50%; border: 3px solid var(--white);
+    }
+    .t0 { background: #ff6b57; }
+    .t1 { background: #4aa8ff; }
+
+    .turn { font-size: 1.2rem; margin-bottom: 1rem; }
+    .winner { font-size: 1.5rem; font-weight: 700; color: var(--green); margin-bottom: 1rem; }
+    .message { margin: 1rem 0; min-height: 3em; }
+    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+
+    .dice {
+      width: 88px; height: 88px; margin: 0 auto; padding: 10px;
+      display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+      background: #fff; border-radius: 14px; box-shadow: 0 4px 0 #999;
+    }
+    .dice.empty { opacity: 0.4; }
+    .dot { width: 15px; height: 15px; border-radius: 50%; place-self: center; }
+    .dot.on { background: #222; }
+
+    @media (max-width: 600px) {
+      .board { grid-template-columns: 1fr 1fr; }
+      .right { grid-column: 2; }
+      .center { grid-column: 1 / 3; grid-row: 2; padding-top: 0.5rem; }
+      .rung { height: 38px; }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- HTML: Python draws the game inside this div -->
+  <main>
+    <h1>Cave Climb</h1>
+    <div id="app"><p style="text-align:center">Loading Python...</p></div>
+  </main>
+
+  <!-- Python -->
+  <script type="py">
+import random
+from html import escape
+from pyscript import document
+from pyodide.ffi import create_proxy
+
+STEPS = 10            # Start (0), steps 1-9, Finish (10)
+TIE_MOVES_UP = False  # True: rolling the same number as before also moves up
+
+# Which of the 9 grid cells show a dot for each dice value
+FACES = {
+    1: [5],
+    2: [1, 9],
+    3: [1, 5, 9],
+    4: [1, 3, 7, 9],
+    5: [1, 3, 5, 7, 9],
+    6: [1, 3, 4, 6, 7, 9],
+}
+
+game = None
+app = document.getElementById("app")
+
+
+def new_game(names):
+    return {
+        "players": [{"name": n, "pos": 0, "prev": None} for n in names],
+        "turn": 0,
+        "winner": None,
+        "roll": None,
+        "message": "Roll the dice to start. A 6 on your first roll does not count.",
+    }
+
+
+def play_turn(g):
+    """Apply one dice roll to the current player."""
+    player = g["players"][g["turn"]]
+    roll = random.randint(1, 6)
+    g["roll"] = roll
+    name = player["name"]
+
+    if player["prev"] is None:
+        # First roll: a 6 does not count, anything else sets the number to beat.
+        if roll == 6:
+            g["message"] = f"{name} rolled a 6 on the first roll. It does not count."
+        else:
+            player["prev"] = roll
+            g["message"] = f"{name} rolled {roll}. This is the number to beat."
+    else:
+        prev = player["prev"]
+        if roll > prev:
+            player["pos"] += 1
+            g["message"] = f"{name} rolled {roll}, higher than {prev}. Up one step."
+        elif roll < prev:
+            player["pos"] = max(0, player["pos"] - 1)
+            g["message"] = f"{name} rolled {roll}, lower than {prev}. Down one step."
+        elif TIE_MOVES_UP:
+            player["pos"] += 1
+            g["message"] = f"{name} rolled {roll}, the same as before. Up one step."
+        else:
+            g["message"] = f"{name} rolled {roll}, the same as before. No move."
+        player["prev"] = roll
+
+    if player["pos"] >= STEPS:
+        g["winner"] = name
+        g["message"] = f"{name} reached the Finish and wins!"
+    else:
+        g["turn"] = (g["turn"] + 1) % len(g["players"])
+
+
+def dice_html(roll):
+    dots = ""
+    for cell in range(1, 10):
+        on = " on" if roll and cell in FACES[roll] else ""
+        dots += f'<span class="dot{on}"></span>'
+    empty = "" if roll else " empty"
+    return f'<div class="dice{empty}" aria-label="Dice shows {roll or "nothing"}">{dots}</div>'
+
+
+def lane_html(index, player, active):
+    rungs = ""
+    for step in range(STEPS, -1, -1):
+        label = "Finish" if step == STEPS else ("Start" if step == 0 else str(step))
+        token = f'<span class="token t{index}"></span>' if player["pos"] == step else ""
+        rungs += f'<div class="rung"><span class="step-no">{label}</span>{token}</div>'
+    side = "left" if index == 0 else "right"
+    on = " active" if active else ""
+    last = player["prev"] if player["prev"] else "-"
+    return (f'<div class="lane {side}{on}"><h3>{escape(player["name"])}</h3>'
+            f'<p class="last">Last roll: {last}</p><div class="ladder">{rungs}</div></div>')
+
+
+def render():
+    if game is None:
+        app.innerHTML = """
+        <section class="panel">
+          <h2>New game</h2>
+          <p>Roll higher than your last roll to climb one step. Roll lower and you slide
+             down one step. First to the Finish wins.</p>
+          <label for="name0">Player 1 name</label>
+          <input id="name0" placeholder="Player 1" maxlength="14">
+          <label for="name1">Player 2 name</label>
+          <input id="name1" placeholder="Player 2" maxlength="14">
+          <button class="button" id="start">Start</button>
+        </section>"""
+        return
+
+    won = game["winner"]
+    lanes = "".join(
+        lane_html(i, p, i == game["turn"] and not won)
+        for i, p in enumerate(game["players"])
+    )
+    if won:
+        status = f'<p class="winner">{escape(game["message"])}</p>'
+        roll_btn = ""
+        reset_label = "Play again"
+    else:
+        status = f'<p class="turn">Turn: <strong>{escape(game["players"][game["turn"]]["name"])}</strong></p>'
+        roll_btn = '<button class="button" id="roll">Roll dice</button>'
+        reset_label = "New game"
+
+    message = "" if won else f'<p class="message">{escape(game["message"])}</p>'
+    app.innerHTML = f"""
+    <div class="board">
+      {lanes}
+      <section class="center">
+        {status}
+        {dice_html(game["roll"])}
+        {message}
+        <div class="actions">
+          {roll_btn}
+          <button class="button secondary" id="reset">{reset_label}</button>
+        </div>
+      </section>
+    </div>"""
+
+
+def on_click(event):
+    global game
+    button = event.target.closest("button")
+    if button is None:
+        return
+    if button.id == "start":
+        names = []
+        for i in range(2):
+            value = document.getElementById(f"name{i}").value.strip()
+            names.append(value or f"Player {i + 1}")
+        game = new_game(names)
+    elif button.id == "roll" and game and not game["winner"]:
+        play_turn(game)
+    elif button.id == "reset":
+        game = None
+    render()
+
+
+app.addEventListener("click", create_proxy(on_click))
+render()
+  </script>
+</body>
+</html>
